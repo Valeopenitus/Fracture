@@ -1,0 +1,21 @@
+Contributing to Fracture
+
+Thanks for your interest!
+
+Fracture is a personal tool born from specific needs (safe evolution of local AI scripts). I welcome:
+- Bug fixes (with clear reproduction steps)
+- Typos/docs improvements
+- Small usability polish
+
+Please **open an Issue first** for anything larger than a typo fix. Big changes (new features, rewrites, dependency additions) are unlikely to be merged — the goal is to keep it lightweight, portable, and focused.
+
+No external dependencies beyond stdlib + tkinter. No compiled extensions.
+
+Pull requests should:
+- Target one clear thing
+- Preserve the section-based philosophy
+- Not touch [PROTECTED] sections in the code
+
+I may close PRs without merging — it's not personal, just keeping the project on its intended path.
+
+Thanks for understanding and helping keep Fracture sharp 🗡️
