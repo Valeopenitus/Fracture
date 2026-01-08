@@ -83,4 +83,3 @@ Flags[PROTECTED] — prevents patching and auto-split
 Multiple flags allowed: [PROTECTED, EXPERIMENTAL]LicenseMIT License — use it, fork it, improve it.Made by @valeopenitus
  during the great Ollama-to-llama.cpp sovereignty migration of 2026.Enjoy the blade. 
 
-
