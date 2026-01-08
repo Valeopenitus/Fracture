@@ -1,5 +1,15 @@
+
 A surgical GUI tool for safely patching and refactoring text files
 Built for local AI development and beyond.Fracture lets you evolve large, fragile scripts (Python, config files, prompts, anything text-based) with confidence. It works by dividing your file into clearly marked sections, allowing you to edit, replace, or auto-split only one part at a time — while automatically backing up every change and letting you rollback instantly.Originally created to maintain a complex local LLM backend (barbalo_core.py) without ever losing a working state. Now released for anyone who’s tired of manual find-and-replace in 1000-line files.Why Section Headers MatterFracture’s safety and power depend on being able to reliably identify logical chunks of your file.It detects sections using a strict three-line header format:text
+
+Who this is for:
+
+People maintaining fragile but valuable scripts
+
+Local AI / LLM developers who can’t risk surprise refactors
+
+Anyone who wants AI help without surrendering control
+
 
 # ==================================================================
 # SECTION: CATEGORY :: Name [FLAGS]
@@ -80,4 +90,5 @@ Flags[PROTECTED] — prevents patching and auto-split
 
 Multiple flags allowed: [PROTECTED, EXPERIMENTAL]LicenseMIT License — use it, fork it, improve it.Made by @valeopenitus
  during the great Ollama-to-llama.cpp sovereignty migration of 2026.Enjoy the blade. 
+
 
