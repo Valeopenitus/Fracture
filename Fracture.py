@@ -376,6 +376,168 @@ def auto_split_section_body(
         if any(line.strip() for line in trailing):
             emit(f"{section_name} — trailing", trailing)
 
+
+def auto_format_file_text_into_sections(
+    *,
+    file_path: str,
+    text: str,
+    category: str = "FILE",
+    max_sections: int = 32,
+) -> tuple[str, int]:
+    """
+    Formats a *single file* by INSERTING SECTION HEADERS into the same file text.
+
+    This does NOT split into multiple files.
+    It creates section boundaries based on top-level def/class blocks when possible.
+    """
+    lines = text.splitlines(keepends=True)
+    blocks = _find_top_level_blocks(lines)
+    if not blocks:
+        return text, 0
+
+    out: list[str] = []
+    used_titles: set[str] = set()
+    created = 0
+
+    def uniq(base: str) -> str:
+        title = base
+        i = 2
+        while title in used_titles:
+            title = f"{base} #{i}"
+            i += 1
+        used_titles.add(title)
+        return title
+
+    def emit(title: str, chunk_lines: list[str]) -> None:
+        nonlocal created
+        if created >= max_sections:
+            return
+        created += 1
+        out.append(f"# {'=' * 70}\n# SECTION: {category} :: {uniq(title)}\n# {'=' * 70}\n")
+        out.extend(chunk_lines)
+        if out and (not out[-1].endswith("\n")):
+            out[-1] = out[-1] + "\n"
+        out.append("\n")
+
+    base_name = os.path.basename(file_path) if file_path else "file"
+
+    prelude_lines = lines[:blocks[0]["start"]]
+    if any(line.strip() for line in prelude_lines):
+        emit(f"{base_name} — prelude", prelude_lines)
+
+    for block in blocks:
+        title = f"{block['kind']} {block['name']}"
+        emit(title, block["lines"])
+        if created >= max_sections:
+            # append remaining without adding more sections
+            out.extend(lines[block["end"]:])
+            break
+
+    if created < max_sections:
+        trailing = lines[blocks[-1]["end"]:]
+        if any(line.strip() for line in trailing):
+            emit(f"{base_name} — trailing", trailing)
+
+    return "".join(out), created
+
+
+def apply_format_whole_file(
+    *,
+    file_path: str,
+    new_text: str,
+    paths: dict,
+    run_py_compile: bool,
+    activity_log_cb=None
+) -> tuple[bool, str, str | None]:
+    """
+    Writes a fully formatted file (with SECTION headers inserted) with:
+    - automatic backup
+    - atomic replace
+    - section post-validation
+    - optional py_compile check
+    """
+    def log(msg: str):
+        if activity_log_cb:
+            activity_log_cb(msg)
+
+    if not os.path.exists(file_path):
+        return False, f"File not found: {file_path}", None
+
+    backup_path = None
+    event = {
+        "ledger_version": "1.0",
+        "event_id": f"evt_{time.strftime('%Y%m%d_%H%M%S')}_{os.getpid()}",
+        "timestamp": time.time(),
+        "action": "format_file",
+        "status": "failed",
+        "tool": {"name": TOOL_NAME, "tool_version": TOOL_VERSION},
+        "target": {"file_path": file_path, "mode": "insert_section_headers"},
+        "backup": {"created": False, "backup_path": None},
+        "checks": {"post_validate_ok": None, "py_compile_ok": None},
+        "message": ""
+    }
+
+    try:
+        log("Reading file...")
+        old_text = open(file_path, "r", encoding="utf-8").read()
+
+        log("Creating backup...")
+        backup_path = make_backup(paths["backups_dir"], file_path, "auto_format_whole_file")
+        event["backup"]["created"] = True
+        event["backup"]["backup_path"] = backup_path
+
+        log("Writing formatted file (atomic replace)...")
+        atomic_write_text(file_path, new_text)
+
+        log("Post-validating sections...")
+        post_text = open(file_path, "r", encoding="utf-8").read()
+        _, post_errors = detect_sections(post_text)
+        event["checks"]["post_validate_ok"] = (len(post_errors) == 0)
+
+        if post_errors:
+            log("Post-validate failed; rolling back...")
+            rollback_from_backup(file_path, backup_path)
+            event["status"] = "rolled_back"
+            event["message"] = "Post-validation failed; rolled back. Errors: " + " | ".join(post_errors)
+            append_ledger(paths["ledger_path"], event)
+            return False, event["message"], backup_path
+
+        if run_py_compile and file_path.lower().endswith(".py"):
+            log("Python compile check...")
+            try:
+                py_compile.compile(file_path, doraise=True)
+                event["checks"]["py_compile_ok"] = True
+            except Exception as e:
+                log("Compile failed; rolling back...")
+                rollback_from_backup(file_path, backup_path)
+                event["status"] = "rolled_back"
+                event["checks"]["py_compile_ok"] = False
+                event["message"] = f"Python compile failed; rolled back. {e}"
+                append_ledger(paths["ledger_path"], event)
+                return False, event["message"], backup_path
+
+        event["status"] = "success"
+        event["message"] = "File formatted successfully (SECTION headers inserted)."
+        append_ledger(paths["ledger_path"], event)
+        return True, event["message"], backup_path
+
+    except Exception as e:
+        try:
+            if backup_path and os.path.exists(backup_path):
+                rollback_from_backup(file_path, backup_path)
+                event["status"] = "rolled_back"
+                event["message"] = f"Exception occurred; rolled back. {e}"
+            else:
+                event["status"] = "failed"
+                event["message"] = f"Exception occurred; no rollback available. {e}"
+        finally:
+            try:
+                append_ledger(paths["ledger_path"], event)
+            except Exception:
+                pass
+        return False, event["message"], backup_path
+
+
     return "".join(out), created
 
 
@@ -1008,6 +1170,7 @@ class FractureApp(tk.Tk):
         ttk.Button(actions, text="Undo Last Patch", command=self.on_undo).pack(side="left", padx=(10, 0))
         ttk.Button(actions, text="Auto-Split Section", command=self.on_auto_split_section).pack(side="left", padx=(10, 0))
         ttk.Button(actions, text="Create Backup Now", command=self.on_manual_backup).pack(side="left", padx=(10, 0))
+        ttk.Checkbutton(actions, text="Validate .py (compile)", variable=self.compile_var).pack(side="right", padx=(0, 10))
 
 # ==================================================================
 # Clean Patch button - removes artifacts from pasted diffs
@@ -1358,11 +1521,69 @@ class FractureApp(tk.Tk):
 # SECTION: GUI :: Actions 
 # ==================================================================
 
+
     def on_auto_split_section(self):
         if not self.file_path:
             self.log("No file selected.")
             return
 
+        try:
+            old_text = open(self.file_path, "r", encoding="utf-8").read()
+        except Exception as e:
+            self.log(f"Read failed: {e}")
+            return
+
+        sections, errors = detect_sections(old_text)
+        if errors:
+            self.log("Cannot auto-split: " + " | ".join(errors))
+            return
+
+        # If the file has NO section headers yet, auto-split means:
+        # INSERT SECTION HEADERS into the same file (no multi-file splitting).
+        if not sections:
+            new_text, created_count = auto_format_file_text_into_sections(
+                file_path=self.file_path,
+                text=old_text,
+                category="FILE",
+            )
+
+            if created_count == 0 or new_text == old_text:
+                self.log("Auto-format: no usable boundaries found.")
+                return
+
+            diff = preview_diff(old_text, new_text, self.file_path)
+
+            win = tk.Toplevel(self)
+            win.title("Auto-Format Diff Preview (Insert SECTION headers)")
+            win.geometry("900x600")
+
+            txt = tk.Text(win, wrap="none")
+            txt.pack(fill="both", expand=True)
+            txt.insert("1.0", diff if diff.strip() else "(No diff produced.)")
+            txt.configure(state="disabled")
+
+            def apply_now():
+                win.destroy()
+                ok, msg, _ = apply_format_whole_file(
+                    file_path=self.file_path,
+                    new_text=new_text,
+                    paths=self.paths,
+                    run_py_compile=bool(self.compile_var.get()),
+                    activity_log_cb=self.log,
+                )
+                self.log(msg)
+                if ok:
+                    self.on_refresh_sections()
+
+            btns = ttk.Frame(win)
+            btns.pack(fill="x", padx=8, pady=8)
+            ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="right")
+            ttk.Button(btns, text=f"Apply Auto-Format ({created_count})", command=apply_now).pack(side="right", padx=(0, 10))
+
+            self.log(f"Auto-format preview ready: {created_count} new sections inserted.")
+            return
+
+        # Normal behavior: auto-split the SELECTED section body into subsections.
         sel = self.section_var.get()
         if not sel:
             self.log("No section selected.")
@@ -1383,17 +1604,6 @@ class FractureApp(tk.Tk):
             return
         if s.protected:
             self.log("Selected section is PROTECTED (cannot auto-split).")
-            return
-
-        try:
-            old_text = open(self.file_path, "r", encoding="utf-8").read()
-        except Exception as e:
-            self.log(f"Read failed: {e}")
-            return
-
-        sections, errors = detect_sections(old_text)
-        if errors:
-            self.log("Cannot auto-split: " + " | ".join(errors))
             return
 
         matches = [sec for sec in sections if sec.identity == identity]
